@@ -1,59 +1,78 @@
-const FILES_TO_CACHE = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/db.js',
-  '/icons/icon-192x192.png',
-  '/icon-512x512.png',
-  '/styles.css',
-]
+const CACHE_NAME = "static-cache-v2";
+const DATA_CACHE_NAME = "data-cache-v1";
 
-const PRECACHE = 'precache-v1';
-const RUNTIME = 'runtime';
+const iconSizes = ["192", "512"];
+const iconFiles = iconSizes.map(
+  (size) => `/icons/icon-${size}x${size}.png`
+);
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches
-      .open(PRECACHE)
-      .then((cache) => cache.addAll(FILES_TO_CACHE))
-      .then(self.skipWaiting())
+const staticFilesToPreCache = [
+  "/",
+  "/db.js",
+  "/index.js",
+  "/index.html",
+  "/styles.css",
+  "/manifest.json",
+].concat(iconFiles);
+
+
+// install
+self.addEventListener("install", function(evt) {
+  evt.waitUntil(
+    caches.open(CACHE_NAME).then(cache => {
+      console.log("Your files were pre-cached successfully!");
+      return cache.addAll(staticFilesToPreCache);
+    })
   );
+
+  self.skipWaiting();
 });
 
-// The activate handler takes care of cleaning up old caches.
-self.addEventListener('activate', (event) => {
-  const currentCaches = [PRECACHE, RUNTIME];
-  event.waitUntil(
-    caches
-      .keys()
-      .then((cacheNames) => {
-        return cacheNames.filter((cacheName) => !currentCaches.includes(cacheName));
-      })
-      .then((cachesToDelete) => {
-        return Promise.all(
-          cachesToDelete.map((cacheToDelete) => {
-            return caches.delete(cacheToDelete);
+// activate
+self.addEventListener("activate", function(evt) {
+  evt.waitUntil(
+    caches.keys().then(keyList => {
+      return Promise.all(
+        keyList.map(key => {
+          if (key !== CACHE_NAME && key !== DATA_CACHE_NAME) {
+            console.log("Removing old cache data", key);
+            return caches.delete(key);
+          }
+        })
+      );
+    })
+  );
+
+  self.clients.claim();
+});
+
+// fetch
+self.addEventListener("fetch", function(evt) {
+  const {url} = evt.request;
+  if (url.includes("/api/")) {
+    evt.respondWith(
+      caches.open(DATA_CACHE_NAME).then(cache => {
+        return fetch(evt.request)
+          .then(response => {
+            // If the response was good, clone it and store it in the cache.
+            if (response.status === 200) {
+              cache.put(evt.request, response.clone());
+            }
+
+            return response;
           })
-        );
-      })
-      .then(() => self.clients.claim())
-  );
-});
-
-self.addEventListener('fetch', (event) => {
-  if (event.request.url.startsWith(self.location.origin)) {
-    event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-
-        return caches.open(RUNTIME).then((cache) => {
-          return fetch(event.request).then((response) => {
-            return cache.put(event.request, response.clone()).then(() => {
-              return response;
-            });
+          .catch(err => {
+            // Network request failed, try to get it from the cache.
+            return cache.match(evt.request);
           });
+      }).catch(err => console.log(err))
+    );
+  } else {
+    // respond from static cache, request is not for /api/*
+    evt.respondWith(
+      caches.open(CACHE_NAME).then(cache => {
+        return cache.match(evt.request).then(response => {
+          return response || fetch(evt.request);
         });
       })
     );
